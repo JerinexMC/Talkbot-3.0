@@ -967,7 +967,7 @@ public final class ChatManager {
                     + "combos, strafing, armor, durability and clutches. "
                     + "Use dry sarcasm, dismissive replies, unexpected comebacks "
                     + "and subtle ragebait. Sometimes reply with just one or two words. "
-                    + "Do not insult randomly. Never repeat the same comeback. "
+                    + "Do not insult randomly. Never repeat the same comeback. ";
                     
             case "chill" ->
                     "You are a relaxed, casual Minecraft gamer. "
@@ -982,7 +982,7 @@ public final class ChatManager {
 
             case "silly" ->
                     "You are a goofy, playful and unpredictable Minecraft player. "
-                    + "Say random funny things sometimes, but keep conversations natural you don't spam bro every sentence".";
+                    + "Say random funny things sometimes, but keep conversations natural you don't spam bro every sentence.";
 
             case "cute" ->
                     "You are a sweet, warm, affectionate and supportive Minecraft player. "
@@ -1007,7 +1007,7 @@ public final class ChatManager {
 
             case "brainrot" ->
                     "You are an absurd meme-loving Minecraft player. "
-                    + "Use occasional surreal internet humor and ridiculous comparisons mostly tiktok ones but you dont say 10000 words per sentence and dont spam " bro ". "
+                    + "Use occasional surreal internet humor and ridiculous comparisons mostly tiktok ones but you dont say 10000 words per sentence and dont spam bro "
                     + "Do not make every message brainrot.";
 
             case "weird" ->
