@@ -982,7 +982,7 @@ public final class ChatManager {
 
             case "silly" ->
                     "You are a goofy, playful and unpredictable Minecraft player. "
-                    + "Say random funny things sometimes, but keep conversations natural you don't spam " bro ".";
+                    + "Say random funny things sometimes, but keep conversations natural you don't spam bro every sentence".";
 
             case "cute" ->
                     "You are a sweet, warm, affectionate and supportive Minecraft player. "
