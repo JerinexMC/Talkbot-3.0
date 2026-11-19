@@ -21,12 +21,13 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
-import java.util.HashMap;
-import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -68,15 +69,28 @@ public final class ChatManager {
             .connectTimeout(Duration.ofSeconds(10))
             .build();
 
-    private final Map<String, Deque<String>> history = new ConcurrentHashMap<>();
+    private final Map<String, Deque<String>> history =
+            new ConcurrentHashMap<>();
 
-    private final Map<String, Long> cooldown = new ConcurrentHashMap<>();
-    private final Map<String, Long> ignoredUntil = new ConcurrentHashMap<>();
-    private final Map<String, Long> moderationCooldown = new ConcurrentHashMap<>();
+    // Normal public-chat cooldowns.
+    private final Map<String, Long> cooldown =
+            new ConcurrentHashMap<>();
+
+    // Separate private-message cooldowns.
+    private final Map<String, Long> whisperCooldown =
+            new ConcurrentHashMap<>();
+
+    private final Map<String, Long> ignoredUntil =
+            new ConcurrentHashMap<>();
+
+    private final Map<String, Long> moderationCooldown =
+            new ConcurrentHashMap<>();
 
     private final AtomicBoolean stopping = new AtomicBoolean();
 
     private volatile long lastRequest;
+    private volatile long lastWhisperRequest;
+
     private volatile BukkitTask cleanup;
 
     public ChatManager(TalkBotPlugin plugin, BotRegistry registry) {
@@ -97,11 +111,13 @@ public final class ChatManager {
 
     public void reload() {
         cooldown.clear();
+        whisperCooldown.clear();
         ignoredUntil.clear();
         moderationCooldown.clear();
 
         synchronized (this) {
             lastRequest = 0L;
+            lastWhisperRequest = 0L;
         }
     }
 
@@ -109,6 +125,10 @@ public final class ChatManager {
         long now = System.currentTimeMillis();
 
         cooldown.entrySet().removeIf(
+                entry -> now - entry.getValue() > 3600000L
+        );
+
+        whisperCooldown.entrySet().removeIf(
                 entry -> now - entry.getValue() > 3600000L
         );
 
@@ -126,7 +146,7 @@ public final class ChatManager {
     // --------------------------------------------------
 
     public void handlePlayerMessage(Player sender, String message) {
-        if (stopping.get() || message == null || message.isBlank()) {
+        if (stopping.get() || sender == null || message == null || message.isBlank()) {
             return;
         }
 
@@ -177,26 +197,32 @@ public final class ChatManager {
     // --------------------------------------------------
 
     public void handleWhisper(Player sender, String target, String message) {
-        if (stopping.get() || sender == null || target == null || message == null) {
+        if (stopping.get()
+                || sender == null
+                || target == null
+                || message == null
+                || message.isBlank()) {
             return;
         }
 
         Player bot = Bukkit.getPlayerExact(target);
 
-        if (bot == null || !registry.isBot(target)) {
+        if (bot == null || !bot.isOnline() || !registry.isBot(target)) {
             return;
         }
 
-        if (aiReady()) {
-            request(
-                    target,
-                    sender.getName(),
-                    message,
-                    true,
-                    false,
-                    true
-            );
+        if (!aiReady()) {
+            return;
         }
+
+        request(
+                target,
+                sender.getName(),
+                message,
+                true,
+                false,
+                true
+        );
     }
 
     // --------------------------------------------------
@@ -204,7 +230,10 @@ public final class ChatManager {
     // --------------------------------------------------
 
     public void handleBotMessage(Player bot, String message) {
-        if (stopping.get() || bot == null || message == null || !aiReady()) {
+        if (stopping.get()
+                || bot == null
+                || message == null
+                || !aiReady()) {
             return;
         }
 
@@ -266,29 +295,70 @@ public final class ChatManager {
             return;
         }
 
-        long cooldownMillis = plugin.getConfig().getLong(
-                "chat.per-bot-cooldown-seconds",
-                18
-        ) * 1000L;
-
-        if (now - cooldown.getOrDefault(botKey, 0L) < cooldownMillis) {
-            return;
-        }
-
-        synchronized (this) {
-            long minimumGap = plugin.getConfig().getLong(
-                    "ai.min-request-interval-ms",
-                    1800L
+        if (whisper) {
+            long whisperCooldownMillis = Math.max(
+                    0L,
+                    plugin.getConfig().getLong(
+                            "chat.whisper-cooldown-seconds",
+                            2L
+                    ) * 1000L
             );
 
-            if (now - lastRequest < minimumGap) {
+            if (now - whisperCooldown.getOrDefault(botKey, 0L)
+                    < whisperCooldownMillis) {
                 return;
             }
 
-            lastRequest = now;
-        }
+            synchronized (this) {
+                long minimumGap = Math.max(
+                        0L,
+                        plugin.getConfig().getLong(
+                                "ai.min-whisper-request-interval-ms",
+                                500L
+                        )
+                );
 
-        cooldown.put(botKey, now);
+                if (now - lastWhisperRequest < minimumGap) {
+                    return;
+                }
+
+                lastWhisperRequest = now;
+            }
+
+            whisperCooldown.put(botKey, now);
+
+        } else {
+            long cooldownMillis = Math.max(
+                    0L,
+                    plugin.getConfig().getLong(
+                            "chat.per-bot-cooldown-seconds",
+                            18L
+                    ) * 1000L
+            );
+
+            if (now - cooldown.getOrDefault(botKey, 0L)
+                    < cooldownMillis) {
+                return;
+            }
+
+            synchronized (this) {
+                long minimumGap = Math.max(
+                        0L,
+                        plugin.getConfig().getLong(
+                                "ai.min-request-interval-ms",
+                                1800L
+                        )
+                );
+
+                if (now - lastRequest < minimumGap) {
+                    return;
+                }
+
+                lastRequest = now;
+            }
+
+            cooldown.put(botKey, now);
+        }
 
         try {
             String style = registry.getStyle(bot);
@@ -320,7 +390,7 @@ public final class ChatManager {
 
             payload.addProperty(
                     "max_tokens",
-                    plugin.getConfig().getInt("ai.max-tokens", 110)
+                    plugin.getConfig().getInt("ai.max-tokens", 220)
             );
 
             JsonArray messages = new JsonArray();
@@ -332,14 +402,25 @@ public final class ChatManager {
                     "content",
                     persona
                             + "\nYou are Minecraft player " + bot + "."
-                            + "\nRespond like a real player in Minecraft chat."
-                            + "\nUsually use one short message, not a paragraph."
+                            + "\nYou are an actual player in a Minecraft server, not an AI assistant."
+                            + "\nTalk naturally like a real person typing in Minecraft chat."
+                            + "\nKeep replies conversational, casual, and relevant to the exact message."
+                            + "\nDo not write essays, explanations, formal paragraphs, or huge walls of text."
+                            + "\nOften send 2 separate short messages, sometimes 3, and sometimes only 1."
+                            + "\nPut each separate message on its own new line."
+                            + "\nDo not combine multiple messages into one paragraph."
+                            + "\nDo not use numbering, bullet points, labels, or quotation marks around messages."
+                            + "\nFor trash talk, use short separate comebacks instead of long roast paragraphs."
+                            + "\nDo not force multiple messages when one natural reply is enough."
                             + "\nNever use emojis, markdown, or assistant-style language."
                             + "\nNever use slurs, threats, sexual remarks, or identity-based insults."
-                            + "\nDo not claim game events or inventory information you were not given."
-                            + "\nYou can discuss anime, shows, games, sports, and normal real-life topics."
-                            + "\nUnderstand context and respond to what the player actually means."
+                            + "\nDo not claim game events, coordinates, or inventory information you were not given."
+                            + "\nYou can discuss Minecraft PvP, Minecraft mechanics, anime, shows, games, sports, and normal real-life topics."
+                            + "\nUnderstand context, jokes, sarcasm, and follow-up messages."
                             + "\nDo not repeat the same phrases constantly."
+                            + "\nDo not constantly say bro, gang, twin, or lil bro."
+                            + "\nUse slang naturally when it fits your personality."
+                            + "\n" + minecraftKnowledge()
                             + "\n" + topic
             );
 
@@ -389,13 +470,14 @@ public final class ChatManager {
                     "content",
                     source + speaker + ": " + message
                             + (addressed ? "\nYou were directly addressed." : "")
+                            + (whisper
+                            ? "\nThis is a private conversation. Reply privately to this player."
+                            : "")
             );
 
             messages.add(input);
-
             payload.add("messages", messages);
 
-            // Store the player's message in conversation memory.
             addHistory(botKey, "USER: " + speaker + ": " + message);
 
             String url = plugin.getConfig().getString("ai.api-url", "");
@@ -469,7 +551,11 @@ public final class ChatManager {
                 sendReply(bot, speaker, message, reply, whisper);
 
             }).exceptionally(error -> {
-                cooldown.remove(botKey, now);
+                if (whisper) {
+                    whisperCooldown.remove(botKey, now);
+                } else {
+                    cooldown.remove(botKey, now);
+                }
 
                 plugin.getLogger().warning(
                         "AI request for " + bot + " failed: "
@@ -480,7 +566,11 @@ public final class ChatManager {
             });
 
         } catch (Exception exception) {
-            cooldown.remove(botKey, now);
+            if (whisper) {
+                whisperCooldown.remove(botKey, now);
+            } else {
+                cooldown.remove(botKey, now);
+            }
 
             plugin.getLogger().warning(
                     "Could not start AI request for " + bot + ": "
@@ -500,18 +590,9 @@ public final class ChatManager {
             String reply,
             boolean whisper
     ) {
-        if (stopping.get() || reply == null) {
+        if (stopping.get() || reply == null || reply.isBlank()) {
             return;
         }
-
-        String clean = reply
-                .replaceAll("[\\r\\n\\t]+", " ")
-                .replaceAll("§[0-9A-FK-ORa-fk-or]", "")
-                .replaceAll("\\s+", " ")
-                .trim();
-
-        // Prevent an AI reply from executing as a command.
-        clean = clean.replace("/", "");
 
         int maxLength = Math.max(
                 1,
@@ -521,41 +602,57 @@ public final class ChatManager {
                 )
         );
 
-        if (clean.length() > maxLength) {
-            clean = clean.substring(0, maxLength).trim();
+        // Split the AI response into separate chat messages.
+        String[] rawLines = reply.split("\\R+");
+
+        List<String> outputs = new ArrayList<>();
+
+        for (String rawLine : rawLines) {
+            String clean = cleanMessage(rawLine);
+
+            if (clean.isBlank()) {
+                continue;
+            }
+
+            if (clean.length() > maxLength) {
+                clean = clean.substring(0, maxLength).trim();
+            }
+
+            if (!clean.isBlank()) {
+                outputs.add(clean);
+            }
+
+            if (outputs.size() >= 3) {
+                break;
+            }
         }
 
-        if (clean.isBlank()) {
+        if (outputs.isEmpty()) {
             return;
         }
 
-        final String output = clean;
-
-        long minimumDelay = Math.max(
-                0L,
-                plugin.getConfig().getLong(
+        long initialDelay = ThreadLocalRandom.current().nextLong(
+                Math.max(0L, plugin.getConfig().getLong(
                         "chat.min-reply-delay-ticks",
-                        10L
-                )
+                        5L
+                )),
+                Math.max(
+                        Math.max(0L, plugin.getConfig().getLong(
+                                "chat.min-reply-delay-ticks",
+                                5L
+                        )),
+                        plugin.getConfig().getLong(
+                                "chat.max-reply-delay-ticks",
+                                15L
+                        )
+                ) + 1L
         );
 
-        long maximumDelay = Math.max(
-                minimumDelay,
-                plugin.getConfig().getLong(
-                        "chat.max-reply-delay-ticks",
-                        35L
-                )
-        );
+        long currentDelay = initialDelay;
 
-        long delay = ThreadLocalRandom.current().nextLong(
-                minimumDelay,
-                maximumDelay + 1L
-        );
-
-        Bukkit.getScheduler().runTask(plugin, () -> {
-            if (stopping.get()) {
-                return;
-            }
+        for (String output : outputs) {
+            final String line = output;
+            final long scheduledDelay = currentDelay;
 
             Bukkit.getScheduler().runTaskLater(plugin, () -> {
                 if (stopping.get()) {
@@ -570,28 +667,56 @@ public final class ChatManager {
 
                 addHistory(
                         botName.toLowerCase(Locale.ROOT),
-                        "BOT: " + output
+                        "BOT: " + line
                 );
 
                 if (whisper) {
                     String command = plugin.getConfig().getString(
                             "chat.whisper-reply-command",
-                            "whisper"
+                            "msg"
                     );
 
                     if (command == null || command.isBlank()) {
-                        command = "whisper";
+                        command = "msg";
                     }
 
+                    command = command.replace("/", "").trim();
+
                     bot.performCommand(
-                            command + " " + speaker + " " + output
+                            command + " " + speaker + " " + line
                     );
                 } else {
-                    bot.chat(output);
+                    bot.chat(line);
                 }
 
-            }, delay);
-        });
+            }, scheduledDelay);
+
+            // 15 characters = 2 seconds = 40 server ticks.
+            // Each character therefore takes 8/3 ticks.
+            long typingTicks = (long) Math.ceil(
+                    line.length() * (40.0 / 15.0)
+            );
+
+            long pauseBetweenMessages = ThreadLocalRandom.current().nextLong(
+                    4L,
+                    9L
+            );
+
+            currentDelay += typingTicks + pauseBetweenMessages;
+        }
+    }
+
+    private String cleanMessage(String input) {
+        if (input == null) {
+            return "";
+        }
+
+        return input
+                .replaceAll("§[0-9A-FK-ORa-fk-or]", "")
+                .replaceAll("^[\\s>*•\\-]+", "")
+                .replaceAll("\\s+", " ")
+                .replace("/", "")
+                .trim();
     }
 
     private void addHistory(String botKey, String line) {
@@ -607,6 +732,56 @@ public final class ChatManager {
                 botHistory.removeFirst();
             }
         }
+    }
+
+    // --------------------------------------------------
+    // MINECRAFT KNOWLEDGE
+    // --------------------------------------------------
+
+    private String minecraftKnowledge() {
+        return """
+                MINECRAFT KNOWLEDGE:
+                You understand Minecraft Java Edition mechanics, survival, building,
+                crafting, enchanting, villagers, trading, farming, redstone, mining,
+                exploration, dimensions, mobs, and multiplayer servers.
+
+                You understand Minecraft PvP concepts including:
+                aim, tracking, strafing, sprint resetting, W-tapping, S-tapping,
+                hit selecting, combos, spacing, movement, rod usage, block hitting,
+                shield timing, critical hits, armor durability, potion effects,
+                hotbar management, healing, clutches, and game sense.
+
+                You understand common PvP modes such as:
+                Crystal PvP, Sword, Axe, Mace, UHC, Pot PvP, NethPot, SMP PvP,
+                Diamond SMP, Lifesteal, BedWars, SkyWars, and general survival PvP.
+
+                You understand that different PvP modes have different mechanics
+                and skill requirements. Do not mix their rules together.
+
+                You understand MCTiers and tier-based PvP communities.
+                You know that tiers and points are used to compare skill within
+                particular modes, but never invent a player's current tier,
+                points, ranking, or test results.
+
+                You understand Mace PvP, including wind charges, fall damage,
+                height advantage, timing, mace smash attacks, and movement.
+                You understand Diamond SMP combat, armor durability, crystals,
+                axes, swords, shields, and resource management.
+
+                You understand Minecraft server behavior, plugins, commands,
+                permissions, bots, latency, ping, TPS, and common PvP terminology.
+
+                You can discuss Minecraft creators, SMP creators, PvP players,
+                anime, sports, gaming, and normal everyday topics when relevant.
+                Do not randomly list facts. Use knowledge naturally in conversation.
+
+                Do not pretend you personally watched a video, met a creator,
+                played a match, or witnessed an event unless the conversation
+                explicitly gives you that information.
+
+                Do not invent current rankings, accusations, statistics,
+                tournament results, or player history.
+                """;
     }
 
     // --------------------------------------------------
@@ -700,7 +875,8 @@ public final class ChatManager {
     }
 
     private void giveResource(Player bot, Player target, String kind) {
-        if (bot == null || target == null || !bot.isOnline() || !target.isOnline()) {
+        if (bot == null || target == null
+                || !bot.isOnline() || !target.isOnline()) {
             return;
         }
 
@@ -751,7 +927,6 @@ public final class ChatManager {
             }
 
             int amount = Math.min(stack.getAmount(), 16);
-
             ItemStack given = new ItemStack(material, amount);
 
             if (stack.getAmount() == amount) {
@@ -810,7 +985,8 @@ public final class ChatManager {
                 12
         ) * 1000L;
 
-        if (now - moderationCooldown.getOrDefault(id, 0L) < cooldownMillis) {
+        if (now - moderationCooldown.getOrDefault(id, 0L)
+                < cooldownMillis) {
             return;
         }
 
@@ -920,7 +1096,6 @@ public final class ChatManager {
             return false;
         }
 
-        // Do not use a prefix if another registered bot shares it.
         int matches = 0;
 
         for (String registered : registry.getRegisteredBots()) {
@@ -956,80 +1131,87 @@ public final class ChatManager {
 
             case "toxic" ->
                     "You are a skilled Minecraft PvP rival. "
-                    + "Your trash talk is effortless, clever, cold and sarcastic, you don't use corny long ass roast lines. "
-                    + "You are straightforward and know how to hit people's nerves "
-                    + "with clever comebacks. Usually reply in 2-8 words. "
-                    + "NEVER exceed 12 words. Never write paragraphs. "
-                    + "Never explain your insults. "
-                    + "Do not constantly say bro, gang, twin or lil bro. "
-                    + "Do not force slang into every message. "
-                    + "Use specific PvP references when relevant, such as aim, "
-                    + "combos, strafing, armor, durability and clutches. "
-                    + "Use dry sarcasm, dismissive replies, unexpected comebacks "
-                    + "and subtle ragebait. Sometimes reply with just one or two words. "
-                    + "Do not insult randomly. Never repeat the same comeback. ";
-                    
+                            + "Your trash talk is effortless, clever, cold and sarcastic. "
+                            + "Do not use corny long roast lines. "
+                            + "You are straightforward and know how to hit people's nerves "
+                            + "with clever comebacks. Usually reply in 2-8 words. "
+                            + "NEVER exceed 12 words in one message. "
+                            + "Never write paragraphs or explain your insults. "
+                            + "Do not constantly say bro, gang, twin or lil bro. "
+                            + "Do not force slang into every message. "
+                            + "Use specific PvP references when relevant, such as aim, "
+                            + "combos, strafing, armor, durability and clutches. "
+                            + "Use dry sarcasm, dismissive replies, unexpected comebacks "
+                            + "and subtle ragebait. Sometimes reply with just one or two words. "
+                            + "Do not insult randomly. Never repeat the same comeback.";
+
             case "chill" ->
                     "You are a relaxed, casual Minecraft gamer. "
-                    + "You are easygoing and friendly. "
-                    + "Use slang like twin, gang, wassup, fr, brb and gtg naturally, "
-                    + "but do not force it into every message.";
+                            + "You are easygoing and friendly. "
+                            + "Use slang like twin, gang, wassup, fr, brb and gtg naturally, "
+                            + "but do not force it into every message.";
 
             case "funny" ->
                     "You are a genuinely funny Minecraft player. "
-                    + "Make quick, witty, unexpected jokes. "
-                    + "Avoid stale dad jokes and forced humor make fun of things that happen to people example is when people die.";
+                            + "Make quick, witty, unexpected jokes. "
+                            + "Avoid stale dad jokes and forced humor. "
+                            + "Make fun of funny things that happen in-game, such as deaths.";
 
             case "silly" ->
                     "You are a goofy, playful and unpredictable Minecraft player. "
-                    + "Say random funny things sometimes, but keep conversations natural you don't spam bro every sentence.";
+                            + "Say random funny things sometimes, but keep conversations natural. "
+                            + "Do not spam bro every sentence.";
 
             case "cute" ->
                     "You are a sweet, warm, affectionate and supportive Minecraft player. "
-                    + "You are friendly without sounding fake or overly dramatic.";
+                            + "You are friendly without sounding fake or overly dramatic.";
 
             case "girl" ->
-                    "You are a casual feminine-presenting Minecraft player "
-                    + " you are a girl cute girl nice girl with your own personality. Be natural and avoid stereotypes.";
+                    "You are a casual feminine-presenting Minecraft player. "
+                            + "You have your own personality. Be natural and avoid stereotypes.";
 
             case "boy" ->
                     "You are a casual masculine-presenting Minecraft player "
-                    + "with your own personality. Be natural and avoid stereotypes.";
+                            + "with your own personality. Be natural and avoid stereotypes.";
 
             case "tomboy" ->
                     "You have confident, sporty tomboy energy. "
-                    + "You are casual, direct, playful and comfortable around gamers.";
+                            + "You are casual, direct, playful and comfortable around gamers.";
 
             case "yn" ->
                     "You are a young casual gamer. Usually chill and relaxed, "
-                    + "but you get heated during PvP. Use natural modern slang mostly  chicago nyc gangster hood slangs like twin, aye, gng, gang, bum, io'n run it, wifedat, idgaf, stfu, you ain't do nun. "
-                    + "Never use slurs or threats.";
+                            + "but you get heated during PvP. Use natural modern slang, "
+                            + "including some Chicago and NYC-inspired slang when it fits, "
+                            + "such as twin, aye, gng, gang, bum, idgaf, and stfu. "
+                            + "Never use slurs or threats.";
 
             case "brainrot" ->
                     "You are an absurd meme-loving Minecraft player. "
-                    + "Use occasional surreal internet humor and ridiculous comparisons mostly tiktok ones but you dont say 10000 words per sentence and dont spam bro "
-                    + "Do not make every message brainrot.";
+                            + "Use occasional surreal internet humor and ridiculous comparisons. "
+                            + "Do not write huge sentences or spam bro. "
+                            + "Do not make every message brainrot.";
 
             case "weird" ->
                     "You are an awkward, strange and unpredictable Minecraft player. "
-                    + "Use surreal, confusing and unexpected non-sexual humor. "
-                    + "Do not harass people.";
+                            + "Use surreal, confusing and unexpected non-sexual humor. "
+                            + "Do not harass people.";
 
             case "dry" ->
                     "You are extremely blunt and dry. "
-                    + "Usually answer with a few words like yeah, nah, maybe or ok. "
-                    + "Rarely elaborate. Do not force jokes.";
+                            + "Usually answer with a few words like yeah, nah, maybe or ok. "
+                            + "Rarely elaborate. Do not force jokes.";
 
             case "admin-professional" ->
                     "You are a calm, professional server moderator. "
-                    + "Be clear and respectful. Warn players about severe language. "
-                    + "Never claim to have actual operator powers or invent punishments.";
+                            + "Be clear and respectful. Warn players about severe language. "
+                            + "Never claim to have actual operator powers or invent punishments.";
 
             case "admin-yn" ->
                     "You are a casual slang-heavy server moderator. "
-                    + "You can be friendly, but you take moderation seriously if someone talks smack then its time to be a YN hood nyc chicago guy. "
-                    + "Warn players about severe language. "
-                    + "Never claim to have actual operator powers.";
+                            + "You can be friendly, but you take moderation seriously. "
+                            + "Use casual slang naturally when it fits. "
+                            + "Warn players about severe language. "
+                            + "Never claim to have actual operator powers.";
 
             default -> {
                 String configured = plugin.getConfig().getString(
@@ -1068,7 +1250,7 @@ public final class ChatManager {
     // --------------------------------------------------
 
     public void onDamage(Player player, boolean visibleEntity) {
-        if (!registry.isBot(player.getName())) {
+        if (player == null || !registry.isBot(player.getName())) {
             return;
         }
 
@@ -1079,7 +1261,7 @@ public final class ChatManager {
     }
 
     public void onLowHealth(Player player) {
-        if (!registry.isBot(player.getName())) {
+        if (player == null || !registry.isBot(player.getName())) {
             return;
         }
 
@@ -1107,7 +1289,7 @@ public final class ChatManager {
     }
 
     public void onDeath(Player player) {
-        if (!registry.isBot(player.getName())) {
+        if (player == null || !registry.isBot(player.getName())) {
             return;
         }
 
@@ -1125,7 +1307,7 @@ public final class ChatManager {
     }
 
     public void onMole(Player bot, String block) {
-        if (!registry.isBot(bot.getName())) {
+        if (bot == null || !registry.isBot(bot.getName())) {
             return;
         }
 
@@ -1162,6 +1344,7 @@ public final class ChatManager {
 
         history.clear();
         cooldown.clear();
+        whisperCooldown.clear();
         ignoredUntil.clear();
         moderationCooldown.clear();
     }
