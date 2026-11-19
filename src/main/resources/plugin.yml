@@ -1,0 +1,15 @@
+name: TalkBot
+version: 3.0.0
+main: com.talkbot.plugin.TalkBotPlugin
+api-version: '1.21'
+author: JerinexMC
+description: Personality and chat layer for existing PvpBot fake players.
+commands:
+  talkbot:
+    description: Manage TalkBot accounts and personalities
+    usage: /talkbot <register|unregister|list|style|reload|test|status>
+    permission: talkbot.admin
+permissions:
+  talkbot.admin:
+    description: Manage TalkBot
+    default: op

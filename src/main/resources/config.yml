@@ -1,0 +1,47 @@
+# TalkBot 3.0 - keep your API key private. TALK_BOT_API_KEY environment variable overrides this value.
+ai:
+  enabled: false
+  api-url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+  api-key: "YOUR_API_KEY_HERE"
+  model: "gemini-3.5-flash-lite"
+  timeout-seconds: 30
+  max-tokens: 110
+  temperature: 0.9
+  min-request-interval-ms: 1800
+chat:
+  min-reply-delay-ticks: 10
+  max-reply-delay-ticks: 35
+  random-reply-chance: 0.25
+  bot-to-bot-chance: 0.10
+  per-bot-cooldown-seconds: 18
+  max-message-length: 180
+  ignored-pause-seconds: 35
+  whisper-command: "whisper"
+  whisper-aliases: ["w", "msg", "tell", "message"]
+  whisper-reply-command: "whisper"
+  tpa-random-chance: 0.50
+  resource-giving-enabled: true
+  mole-detection-enabled: true
+  mole-materials: ["LEVER", "STONE_BUTTON", "OAK_BUTTON", "SPRUCE_BUTTON", "BIRCH_BUTTON", "JUNGLE_BUTTON", "ACACIA_BUTTON", "DARK_OAK_BUTTON", "MANGROVE_BUTTON", "CHERRY_BUTTON", "BAMBOO_BUTTON", "CRIMSON_BUTTON", "WARPED_BUTTON", "POLISHED_BLACKSTONE_BUTTON", "WHITE_WOOL", "BLACK_WOOL", "OBSIDIAN", "NETHER_WART_BLOCK"]
+personality:
+  default-style: "chill"
+  default: "You are an ordinary Minecraft player. Be natural, concise, socially aware. Never use emojis, markdown, or assistant-like phrasing. Only claim game facts supplied to you."
+  bots: {}
+moderation:
+  enabled: true
+  cooldown-seconds: 12
+  warn-for-severe-language: true
+  # Detection is normalized and intentionally avoids automatic punishment.
+topics:
+  jjk:
+    keywords: ["jjk", "gojo", "sukuna", "mahoraga", "domain", "megumi"]
+  naruto:
+    keywords: ["naruto", "sasuke", "itachi", "sharingan", "rasengan", "madara"]
+  bleach:
+    keywords: ["bleach", "ichigo", "bankai", "aizen", "zanpakuto"]
+  cyberpunk:
+    keywords: ["cyberpunk", "david", "lucy", "edgerunners", "adam smasher", "sandevistan"]
+  pbb:
+    keywords: ["pbb", "kuya", "pinoy big brother", "eviction", "nominate", "bahay ni kuya"]
+  romance_anime:
+    keywords: ["waguri", "kaoru hana", "dress up darling", "marin", "bunny girl", "mai", "sakuta", "romance", "horimiya", "roshidere", "alya"]
