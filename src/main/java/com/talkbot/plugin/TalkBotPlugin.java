@@ -1,6 +1,7 @@
 
 package com.talkbot.plugin;
 
+import com.talkbot.plugin.listener.WhisperListener;
 import com.talkbot.plugin.commands.TalkBotCommand;
 import com.talkbot.plugin.listener.ChatListener;
 import com.talkbot.plugin.manager.BotRegistry;
@@ -52,6 +53,10 @@ public final class TalkBotPlugin extends JavaPlugin {
             new ChatListener(this, chat),
             this
         );
+        getServer().getPluginManager().registerEvents(
+    new WhisperListener(this, chat),
+    this
+);
 
         getLogger().info(
             "TalkBot 3.0 enabled; registered bots: "
