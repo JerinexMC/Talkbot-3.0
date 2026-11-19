@@ -3,10 +3,12 @@ package com.talkbot.plugin.manager;
 
 import com.talkbot.plugin.TalkBotPlugin;
 
+import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Collections;
+import java.util.Locale;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.logging.Level;
@@ -14,56 +16,67 @@ import java.util.logging.Level;
 public final class BotRegistry {
 
     private final TalkBotPlugin plugin;
-    private final DatabaseManager db;
+    private final DatabaseManager database;
 
     private final Set<String> bots =
-        new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+            new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
 
     public BotRegistry(TalkBotPlugin plugin, DatabaseManager database) {
         this.plugin = plugin;
-        this.db = database;
+        this.database = database;
 
         reload();
     }
 
     /**
-     * Reloads registered bots from the database.
+     * Reload registered bots from SQLite.
+     *
+     * The current registry is only replaced after a successful query.
      */
     public synchronized void reload() {
         Set<String> loadedBots =
-            new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+                new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
 
-        try (PreparedStatement statement =
-                 db.connection().prepareStatement(
-                     "SELECT username FROM registered_bots"
-                 );
-             ResultSet results = statement.executeQuery()) {
+        try {
+            Connection connection = database.connection();
 
-            while (results.next()) {
-                String username = results.getString("username");
+            try (PreparedStatement statement =
+                         connection.prepareStatement(
+                                 "SELECT username FROM registered_bots"
+                         );
+                 ResultSet results = statement.executeQuery()) {
 
-                if (valid(username)) {
-                    loadedBots.add(username);
+                while (results.next()) {
+                    String username = results.getString("username");
+
+                    if (isValidUsername(username)) {
+                        loadedBots.add(username);
+                    }
                 }
             }
 
             bots.clear();
             bots.addAll(loadedBots);
 
+            plugin.getLogger().info(
+                    "Loaded " + bots.size() + " registered TalkBots."
+            );
+
         } catch (SQLException exception) {
             plugin.getLogger().log(
-                Level.SEVERE,
-                "Could not load registered bots from the database.",
-                exception
+                    Level.SEVERE,
+                    "Failed to load registered TalkBots. "
+                            + "The existing registry was preserved.",
+                    exception
             );
         }
     }
 
     /**
-     * Registers a bot.
+     * Register a bot.
      */
     public synchronized boolean registerBot(String username) {
-        if (!valid(username)) {
+        if (!isValidUsername(username)) {
             return false;
         }
 
@@ -71,27 +84,38 @@ public final class BotRegistry {
             return false;
         }
 
-        try (PreparedStatement statement =
-                 db.connection().prepareStatement(
-                     "INSERT INTO registered_bots(username) VALUES(?)"
-                 )) {
+        String normalizedUsername = username.trim();
 
-            statement.setString(1, username);
-            statement.executeUpdate();
+        try {
+            Connection connection = database.connection();
 
-            bots.add(username);
+            try (PreparedStatement statement =
+                         connection.prepareStatement(
+                                 "INSERT INTO registered_bots(username) VALUES(?)"
+                         )) {
+
+                statement.setString(1, normalizedUsername);
+
+                int affectedRows = statement.executeUpdate();
+
+                if (affectedRows <= 0) {
+                    return false;
+                }
+            }
+
+            bots.add(normalizedUsername);
 
             plugin.getLogger().info(
-                "Registered bot: " + username
+                    "Registered TalkBot: " + normalizedUsername
             );
 
             return true;
 
         } catch (SQLException exception) {
             plugin.getLogger().log(
-                Level.WARNING,
-                "Could not register bot " + username,
-                exception
+                    Level.WARNING,
+                    "Failed to register TalkBot: " + normalizedUsername,
+                    exception
             );
 
             return false;
@@ -99,40 +123,46 @@ public final class BotRegistry {
     }
 
     /**
-     * Unregisters a bot.
+     * Unregister a bot.
      */
     public synchronized boolean unregisterBot(String username) {
         if (username == null || username.isBlank()) {
             return false;
         }
 
-        try (PreparedStatement statement =
-                 db.connection().prepareStatement(
-                     "DELETE FROM registered_bots "
-                     + "WHERE username = ? COLLATE NOCASE"
-                 )) {
+        String normalizedUsername = username.trim();
 
-            statement.setString(1, username);
+        try {
+            Connection connection = database.connection();
 
-            int affectedRows = statement.executeUpdate();
+            try (PreparedStatement statement =
+                         connection.prepareStatement(
+                                 "DELETE FROM registered_bots "
+                                         + "WHERE username = ? COLLATE NOCASE"
+                         )) {
 
-            if (affectedRows == 0) {
-                return false;
+                statement.setString(1, normalizedUsername);
+
+                int affectedRows = statement.executeUpdate();
+
+                if (affectedRows <= 0) {
+                    return false;
+                }
             }
 
-            bots.remove(username);
+            bots.remove(normalizedUsername);
 
             plugin.getLogger().info(
-                "Unregistered bot: " + username
+                    "Unregistered TalkBot: " + normalizedUsername
             );
 
             return true;
 
         } catch (SQLException exception) {
             plugin.getLogger().log(
-                Level.WARNING,
-                "Could not unregister bot " + username,
-                exception
+                    Level.WARNING,
+                    "Failed to unregister TalkBot: " + normalizedUsername,
+                    exception
             );
 
             return false;
@@ -140,18 +170,18 @@ public final class BotRegistry {
     }
 
     /**
-     * Checks whether a username belongs to a registered bot.
+     * Check whether a player is a registered bot.
      */
     public synchronized boolean isBot(String username) {
         return username != null && bots.contains(username);
     }
 
     /**
-     * Returns a safe, read-only copy of registered bots.
+     * Return a read-only snapshot of registered bots.
      */
     public synchronized Set<String> getRegisteredBots() {
         Set<String> copy =
-            new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+                new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
 
         copy.addAll(bots);
 
@@ -159,77 +189,85 @@ public final class BotRegistry {
     }
 
     /**
-     * Gets a bot's personality style.
+     * Retrieve a bot's saved personality.
      */
     public synchronized String getStyle(String username) {
         if (username != null && !username.isBlank()) {
+            try {
+                Connection connection = database.connection();
 
-            try (PreparedStatement statement =
-                     db.connection().prepareStatement(
-                         "SELECT style FROM bot_styles "
-                         + "WHERE username = ? COLLATE NOCASE"
-                     )) {
+                try (PreparedStatement statement =
+                             connection.prepareStatement(
+                                     "SELECT style FROM bot_styles "
+                                             + "WHERE username = ? COLLATE NOCASE"
+                             )) {
 
-                statement.setString(1, username);
+                    statement.setString(1, username.trim());
 
-                try (ResultSet results = statement.executeQuery()) {
-                    if (results.next()) {
-                        String style = results.getString("style");
+                    try (ResultSet results = statement.executeQuery()) {
+                        if (results.next()) {
+                            String style = results.getString("style");
 
-                        if (style != null && !style.isBlank()) {
-                            return style;
+                            if (style != null && !style.isBlank()) {
+                                return style.trim().toLowerCase(Locale.ROOT);
+                            }
                         }
                     }
                 }
 
             } catch (SQLException exception) {
                 plugin.getLogger().log(
-                    Level.WARNING,
-                    "Could not retrieve personality for " + username,
-                    exception
+                        Level.WARNING,
+                        "Failed to retrieve personality for " + username,
+                        exception
                 );
             }
         }
 
         return plugin.getConfig().getString(
-            "personality.default-style",
-            "chill"
+                "personality.default-style",
+                "chill"
         );
     }
 
     /**
-     * Saves or updates a bot's personality style.
+     * Save or update a bot's personality.
      */
     public synchronized boolean setStyle(
-        String username,
-        String style
+            String username,
+            String style
     ) {
-        if (!valid(username)
+        if (!isValidUsername(username)
                 || style == null
                 || style.isBlank()) {
             return false;
         }
 
-        try (PreparedStatement statement =
-                 db.connection().prepareStatement(
-                     "INSERT INTO bot_styles(username, style) "
-                     + "VALUES(?, ?) "
-                     + "ON CONFLICT(username) "
-                     + "DO UPDATE SET style = excluded.style"
-                 )) {
+        String normalizedUsername = username.trim();
+        String normalizedStyle = style.trim().toLowerCase(Locale.ROOT);
 
-            statement.setString(1, username);
-            statement.setString(2, style.toLowerCase());
+        try {
+            Connection connection = database.connection();
 
-            statement.executeUpdate();
+            try (PreparedStatement statement =
+                         connection.prepareStatement(
+                                 "INSERT INTO bot_styles(username, style) "
+                                         + "VALUES(?, ?) "
+                                         + "ON CONFLICT(username) "
+                                         + "DO UPDATE SET style = excluded.style"
+                         )) {
 
-            return true;
+                statement.setString(1, normalizedUsername);
+                statement.setString(2, normalizedStyle);
+
+                return statement.executeUpdate() > 0;
+            }
 
         } catch (SQLException exception) {
             plugin.getLogger().log(
-                Level.WARNING,
-                "Could not save personality for " + username,
-                exception
+                    Level.WARNING,
+                    "Failed to save personality for " + normalizedUsername,
+                    exception
             );
 
             return false;
@@ -237,10 +275,10 @@ public final class BotRegistry {
     }
 
     /**
-     * Validates Minecraft Java usernames.
+     * Validate a Minecraft Java username.
      */
-    private static boolean valid(String username) {
+    private static boolean isValidUsername(String username) {
         return username != null
-            && username.matches("[A-Za-z0-9_]{3,16}");
+                && username.matches("[A-Za-z0-9_]{3,16}");
     }
 }
