@@ -24,7 +24,7 @@ public final class TalkBotVoicechatPlugin implements VoicechatPlugin {
     public static void attachPlugin(TalkBotPlugin plugin) {
         pluginInstance = plugin;
         BukkitVoicechatService service = Bukkit.getServicesManager().load(BukkitVoicechatService.class);
-        if (service != null) {
+        if (service != null && plugin != null) {
             plugin.getLogger().info("Simple Voice Chat service detected on server.");
         }
     }
@@ -71,7 +71,7 @@ public final class TalkBotVoicechatPlugin implements VoicechatPlugin {
         boolean whispering = event.getPacket().isWhispering();
 
         Bukkit.getScheduler().runTask(pluginInstance, () -> {
-            if (player.isOnline()) {
+            if (player.isOnline() && pluginInstance.getChatManager() != null) {
                 pluginInstance.getChatManager().handleVoiceActivity(player, whispering);
             }
         });
