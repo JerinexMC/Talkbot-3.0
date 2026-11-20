@@ -3,9 +3,9 @@ package com.talkbot.plugin.voice;
 import com.talkbot.plugin.TalkBotPlugin;
 
 import de.maxhenkel.voicechat.api.BukkitVoicechatService;
+import de.maxhenkel.voicechat.api.VoicechatApi;
 import de.maxhenkel.voicechat.api.VoicechatConnection;
 import de.maxhenkel.voicechat.api.VoicechatPlugin;
-import de.maxhenkel.voicechat.api.VoicechatServerApi;
 import de.maxhenkel.voicechat.api.events.EventRegistration;
 import de.maxhenkel.voicechat.api.events.MicrophonePacketEvent;
 
@@ -35,7 +35,7 @@ public final class TalkBotVoicechatPlugin implements VoicechatPlugin {
     }
 
     @Override
-    public void initialize(VoicechatServerApi api) {
+    public void initialize(VoicechatApi api) {
         if (pluginInstance != null) {
             pluginInstance.getLogger().info("TalkBot hooked into Simple Voice Chat API.");
         }
